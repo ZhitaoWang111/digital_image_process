@@ -1,6 +1,6 @@
 # Image Processing Pipeline (Hard-coded Filenames)
 
-本仓库包含 4 个脚本，组成一条“（可选）修正太阳/强光斑 → 交互式 GrabCut 抠图 → 无缝多类分割与边缘平滑 → 分区增强并合成最终成片”的流水线。
+本仓库包含若干脚本，组成一条“（可选）修正太阳/强光斑 → 交互式 GrabCut 抠图 → 无缝多类分割与边缘平滑 → 分区增强并合成最终成片”的流水线。
 
 ⚠️ **重要**：图像文件名基本都是**写死（hard-coded）**的（少量脚本支持指定工作目录，但读写的图片名仍固定）。请严格按下文列出的文件名准备输入文件，并按对应的输出文件名查看结果。
 
@@ -11,7 +11,7 @@
 建议 Python 3.8+。
 
 ```bash
-pip install opencv-python numpy matplotlib
+pip install opencv-python numpy scipy imageio matplotlib
 ```
 
 > `GrabCut.py` 需要图形界面弹窗（OpenCV window）。无 GUI 的纯服务器环境可能无法运行。
@@ -96,46 +96,76 @@ python imgenhanced.py
 
 ---
 
-### 4) `landscape_pipeline.py`（分区增强 + 自动拼回 + 全局调色，生成成片）
+### 4) `optimize_landscape.py`（局部四分区优化 / 分区增强）
 
-**功能**（整体流程）：
-1. **局部优化（optimize）**：对 `part_*_0.jpg` 四个部件分别做增强处理（例如天空色彩/对比、地景去雾、白化区域压暗提饱和等），输出 `optimized_*.jpg`
-2. **全局合成（global）**：将 `optimized_*.jpg` 自动定位并拼回原始底图 `9.jpg`，做羽化融合，并叠加全局统一效果，输出最终成片 `final_masterpiece.jpg`
+**功能**：对 `imgenhanced.py` 输出的四个部件扣图（sky/dam/water/slope）分别做针对性的增强，输出对应的 `optimized_*.jpg`。
 
-> 脚本支持指定工作目录 `--workdir`，但在该目录内**读取/写入的图片名仍是固定的**。
+主要处理要点（按部件）：
+- **sky**：LAB 空间增强蓝色（b<0 更蓝）+ 对 L 通道做 CLAHE + 添加轻微“太阳光晕”
+- **dam**：暗通道先验去雾（DCP）→ 识别“发白区域”（亮度高 & 饱和度低）并压暗、提饱和 → 纹理细节增强 → 锐化
+- **water**：整体偏蓝 + 强化高频“波纹”细节 + 对高亮区域略微增亮
+- **slope**：L 通道 CLAHE 提细节 + 轻微暖色 + 锐化
 
-**运行（默认 all：先 optimize 再 global）：**
+**运行：**
+
 ```bash
-python landscape_pipeline.py
+python optimize_landscape.py
+python optimize_landscape.py --workdir .
+python optimize_landscape.py --preview   # 预览（需要 matplotlib）
 ```
 
-**可选运行方式：**
-```bash
-python landscape_pipeline.py optimize
-python landscape_pipeline.py global
-python landscape_pipeline.py all
-python landscape_pipeline.py all --workdir .
-python landscape_pipeline.py all --workdir /path/to/images
-```
+**输入（写死，位于 workdir，默认当前目录）：**
+- `part_sky_0.jpg`
+- `part_dam_0.jpg`
+- `part_water_0.jpg`
+- `part_slope_0.jpg`
 
-**输入（写死的文件名，位于 workdir，默认当前目录）：**
-- 底图：`9.jpg`
-- 四个部件扣图（来自 `imgenhanced.py`）：  
-  - `part_sky_0.jpg`
-  - `part_dam_0.jpg`
-  - `part_water_0.jpg`
-  - `part_slope_0.jpg`
-
-**中间输出（写死，位于 workdir）：**
+**输出（写死，位于 workdir）：**
 - `optimized_sky.jpg`
 - `optimized_dam.jpg`
 - `optimized_water.jpg`
 - `optimized_slope.jpg`
 
-**最终输出（写死，位于 workdir）：**
+---
+
+### 5) `global_landscape_correction.py`（自动定位拼接 + 全局光影/色调统一）
+
+**功能**：把 `optimized_*.jpg` 自动定位并拼回底图 `9.jpg`，完成无缝融合，并叠加全局统一效果，输出最终成片 `final_masterpiece.jpg`。
+
+处理要点：
+- **自动定位/拼接**：对每个部件，从原始扣图 `part_*_0.jpg` 中找内部模板块（避开黑边），对底图做模板匹配定位；用原始扣图生成 mask（fill holes + 轻微腐蚀）并高斯羽化，按 alpha 融合到 `9.jpg` 上
+- **全局统一效果**：天空高光“漫射/溢出”到地景边缘、坝体轻混天空色（空气透视）、整体 LAB 轻微暖色 + 亮度 S 曲线
+
+**运行：**
+
+```bash
+python global_landscape_correction.py
+python global_landscape_correction.py --workdir .
+python global_landscape_correction.py --preview   # 预览（需要 matplotlib）
+```
+
+**输入（写死，位于 workdir，默认当前目录）：**
+- 底图：`9.jpg`
+- 四个部件原始扣图（用于定位与 mask）：
+  - `part_sky_0.jpg`
+  - `part_dam_0.jpg`
+  - `part_water_0.jpg`
+  - `part_slope_0.jpg`
+- 四个部件增强结果（用于真正拼回）：
+  - `optimized_sky.jpg`
+  - `optimized_dam.jpg`
+  - `optimized_water.jpg`
+  - `optimized_slope.jpg`
+
+**输出（写死，位于 workdir）：**
 - `final_masterpiece.jpg`
 
 ---
+
+> 说明：如果你另外有一个 `landscape_pipeline.py` 封装脚本，它通常只是按顺序调用 `optimize_landscape.py` → `global_landscape_correction.py`，便于一键跑完。
+
+---
+
 
 ## Recommended Run Order (Hard-coded Filenames)
 
@@ -253,13 +283,21 @@ part_water_0.jpg
 part_slope_0.jpg
 ```
 
-运行（默认 `all`）：
+运行（先局部优化，再全局合成）：
 
 ```bash
-python landscape_pipeline.py
+python optimize_landscape.py
+python global_landscape_correction.py
 ```
 
-输出：
+如需指定图片目录（但文件名仍固定），使用：
+
+```bash
+python optimize_landscape.py --workdir /path/to/images
+python global_landscape_correction.py --workdir /path/to/images
+```
+
+输出（位于 workdir）：
 
 ```text
 optimized_sky.jpg
@@ -276,7 +314,7 @@ final_masterpiece.jpg
 - `GrabCut.py` 需要 GUI 弹窗；无桌面环境可能无法运行。
 - 默认情况下：
   - GrabCut 使用 `9_enhanced.jpg`
-  - imgenhanced / landscape_pipeline 使用 `9.jpg`
+  - imgenhanced / global_landscape_correction 使用 `9.jpg`
 
   如果 `9_enhanced.jpg` 与 `9.jpg` 内容/尺寸不同，会影响“分割/拼接”的一致性，但脚本不一定会报错（只是结果可能不理想）。
-- `landscape_pipeline.py` 的自动拼接依赖模板匹配定位。如果部件扣图与底图不对应（例如来自不同底图），会导致定位失败或拼接位置错误。
+- `global_landscape_correction.py` 的自动拼接依赖模板匹配定位。如果部件扣图与底图不对应（例如来自不同底图），会导致定位失败或拼接位置错误。
